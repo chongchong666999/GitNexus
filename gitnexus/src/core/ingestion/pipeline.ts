@@ -6,6 +6,7 @@ import { processCalls, processCallsFromExtracted } from './call-processor.js';
 import { processHeritage, processHeritageFromExtracted } from './heritage-processor.js';
 import { processCommunities } from './community-processor.js';
 import { processProcesses } from './process-processor.js';
+import { processGameAssets } from './game-asset-processor.js';
 import { createSymbolTable } from './symbol-table.js';
 import { createASTCache } from './ast-cache.js';
 import { PipelineProgress, PipelineResult } from '../../types/pipeline.js';
@@ -332,6 +333,18 @@ export const runPipelineFromRepo = async (
         step: step.step,
       });
     });
+
+    // ── Phase 8: Game Assets (Cocos Creator .fire/.prefab) ─────────────────
+    const gameAssetResult = await processGameAssets(
+      graph,
+      repoPath,
+      scannedFiles,
+      (progress) => onProgress(progress),
+    );
+
+    if (isDev && (gameAssetResult.scenesFound > 0 || gameAssetResult.prefabsFound > 0)) {
+      console.log(`🎮 Game assets: ${gameAssetResult.scenesFound} scenes, ${gameAssetResult.prefabsFound} prefabs → ${gameAssetResult.nodesAdded} nodes, ${gameAssetResult.relsAdded} rels`);
+    }
 
     onProgress({
       phase: 'complete',

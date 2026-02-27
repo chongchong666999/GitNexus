@@ -16,7 +16,9 @@ export const NODE_TABLES = [
   'File', 'Folder', 'Function', 'Class', 'Interface', 'Method', 'CodeElement', 'Community', 'Process',
   // Multi-language support
   'Struct', 'Enum', 'Macro', 'Typedef', 'Union', 'Namespace', 'Trait', 'Impl',
-  'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module'
+  'TypeAlias', 'Const', 'Static', 'Property', 'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module',
+  // Cocos Creator game asset types
+  'Scene', 'GameNode', 'GamePrefab', 'GameComponent',
 ] as const;
 export type NodeTableName = typeof NODE_TABLES[number];
 
@@ -26,7 +28,11 @@ export type NodeTableName = typeof NODE_TABLES[number];
 export const REL_TABLE_NAME = 'CodeRelation';
 
 // Valid relation types
-export const REL_TYPES = ['CONTAINS', 'DEFINES', 'IMPORTS', 'CALLS', 'EXTENDS', 'IMPLEMENTS', 'MEMBER_OF', 'STEP_IN_PROCESS'] as const;
+export const REL_TYPES = [
+  'CONTAINS', 'DEFINES', 'IMPORTS', 'CALLS', 'EXTENDS', 'IMPLEMENTS', 'MEMBER_OF', 'STEP_IN_PROCESS',
+  // Cocos Creator game asset relation types
+  'CONTAINS_NODE', 'HAS_COMPONENT', 'INSTANTIATES', 'SCRIPT_REFS',
+] as const;
 export type RelType = typeof REL_TYPES[number];
 
 // ============================================================================
@@ -190,6 +196,51 @@ export const ANNOTATION_SCHEMA = CODE_ELEMENT_BASE('Annotation');
 export const CONSTRUCTOR_SCHEMA = CODE_ELEMENT_BASE('Constructor');
 export const TEMPLATE_SCHEMA = CODE_ELEMENT_BASE('Template');
 export const MODULE_SCHEMA = CODE_ELEMENT_BASE('Module');
+
+// ============================================================================
+// COCOS CREATOR GAME ASSET NODE TABLE SCHEMAS
+// ============================================================================
+
+export const SCENE_SCHEMA = `
+CREATE NODE TABLE Scene (
+  id STRING,
+  name STRING,
+  filePath STRING,
+  nodeCount INT64,
+  componentCount INT64,
+  PRIMARY KEY (id)
+)`;
+
+export const GAME_NODE_SCHEMA = `
+CREATE NODE TABLE GameNode (
+  id STRING,
+  name STRING,
+  filePath STRING,
+  active BOOLEAN,
+  position STRING,
+  size STRING,
+  PRIMARY KEY (id)
+)`;
+
+export const GAME_PREFAB_SCHEMA = `
+CREATE NODE TABLE GamePrefab (
+  id STRING,
+  name STRING,
+  filePath STRING,
+  uuid STRING,
+  nodeCount INT64,
+  PRIMARY KEY (id)
+)`;
+
+export const GAME_COMPONENT_SCHEMA = `
+CREATE NODE TABLE GameComponent (
+  id STRING,
+  name STRING,
+  filePath STRING,
+  isScript BOOLEAN,
+  scriptPath STRING,
+  PRIMARY KEY (id)
+)`;
 
 // ============================================================================
 // RELATION TABLE SCHEMA
@@ -364,6 +415,16 @@ CREATE REL TABLE ${REL_TABLE_NAME} (
   FROM \`Annotation\` TO Process,
   FROM \`Template\` TO Process,
   FROM CodeElement TO Process,
+  FROM Scene TO GameNode,
+  FROM GameNode TO GameNode,
+  FROM GamePrefab TO GameNode,
+  FROM GameNode TO GameComponent,
+  FROM Scene TO GamePrefab,
+  FROM GameNode TO GamePrefab,
+  FROM GameComponent TO Function,
+  FROM GameComponent TO Class,
+  FROM GameComponent TO Method,
+  FROM GameComponent TO File,
   type STRING,
   confidence DOUBLE,
   reason STRING,
@@ -424,6 +485,11 @@ export const NODE_SCHEMA_QUERIES = [
   CONSTRUCTOR_SCHEMA,
   TEMPLATE_SCHEMA,
   MODULE_SCHEMA,
+  // Cocos Creator game asset schemas
+  SCENE_SCHEMA,
+  GAME_NODE_SCHEMA,
+  GAME_PREFAB_SCHEMA,
+  GAME_COMPONENT_SCHEMA,
 ];
 
 export const REL_SCHEMA_QUERIES = [

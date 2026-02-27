@@ -328,6 +328,19 @@ const getCopyQuery = (table: NodeTableName, filePath: string): string => {
   if (table === 'Process') {
     return `COPY ${t}(id, label, heuristicLabel, processType, stepCount, communities, entryPointId, terminalId) FROM "${filePath}" ${COPY_CSV_OPTS}`;
   }
+  // Cocos Creator game asset tables
+  if (table === 'Scene') {
+    return `COPY ${t}(id, name, filePath, nodeCount, componentCount) FROM "${filePath}" ${COPY_CSV_OPTS}`;
+  }
+  if (table === 'GameNode') {
+    return `COPY ${t}(id, name, filePath, active, position, size) FROM "${filePath}" ${COPY_CSV_OPTS}`;
+  }
+  if (table === 'GamePrefab') {
+    return `COPY ${t}(id, name, filePath, uuid, nodeCount) FROM "${filePath}" ${COPY_CSV_OPTS}`;
+  }
+  if (table === 'GameComponent') {
+    return `COPY ${t}(id, name, filePath, isScript, scriptPath) FROM "${filePath}" ${COPY_CSV_OPTS}`;
+  }
   // TypeScript/JS code element tables have isExported; multi-language tables do not
   if (TABLES_WITH_EXPORTED.has(table)) {
     return `COPY ${t}(id, name, filePath, startLine, endLine, isExported, content, description) FROM "${filePath}" ${COPY_CSV_OPTS}`;

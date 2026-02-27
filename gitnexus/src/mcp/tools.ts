@@ -207,4 +207,89 @@ Confidence: 1.0 = certain, <0.8 = fuzzy match`,
       required: ['target', 'direction'],
     },
   },
+
+  // ── Cocos Creator Game Asset Tools ──────────────────────────────────────────
+
+  {
+    name: 'game_query',
+    description: `Search Cocos Creator game assets — scenes, prefabs, nodes, and components.
+
+WHEN TO USE: Finding game assets in a Cocos Creator project. Use when you want to:
+- Find which scenes use a specific prefab
+- Find all nodes named "loginPanel" across scenes
+- List all script components of a given type
+- Discover what's in a specific scene
+
+AFTER THIS: Use game_context() on a specific asset for full hierarchy view, or game_impact() to check what uses it.
+
+Returns: matching assets grouped by type (Scene, GamePrefab, GameNode, GameComponent) with file locations.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Name or keyword to search for (node name, scene name, component type, prefab name)' },
+        type: {
+          type: 'string',
+          description: 'Filter by asset type: "scene", "prefab", "node", "component" (default: all)',
+          enum: ['scene', 'prefab', 'node', 'component'],
+        },
+        limit: { type: 'number', description: 'Max results to return (default: 20)', default: 20 },
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: ['query'],
+    },
+  },
+
+  {
+    name: 'game_context',
+    description: `Get complete context for a Cocos Creator scene or prefab — full node hierarchy, components, script attachments, and cross-layer code connections.
+
+WHEN TO USE: Understanding a scene's structure or a prefab's contents. Use when you need:
+- Complete node tree of a scene
+- All script components attached to nodes in a scene/prefab
+- Which TypeScript classes are used in this scene (cross-layer)
+- Instantiation sources (where this prefab is used)
+
+AFTER THIS: Use game_impact() to check blast radius, or use context() on linked code symbols.
+
+Returns: hierarchy tree, component list, script refs (cross-layer links to code).`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Scene or prefab name (e.g. "LoginScene", "LoginPanel")' },
+        includeInactive: { type: 'boolean', description: 'Include inactive nodes (default: false)', default: false },
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: ['name'],
+    },
+  },
+
+  {
+    name: 'game_impact',
+    description: `Analyze blast radius for a Cocos Creator asset — what scenes/nodes would be affected if this prefab or script changes.
+
+WHEN TO USE: Before modifying a prefab or a script that's used in scenes. Answers:
+- "If I change LoginPanel.prefab, which scenes are affected?"
+- "If I refactor LoginController.ts, which scene nodes use it?"
+- "How many scenes depend on this shared prefab?"
+
+Performs cross-layer analysis: script changes → affected game nodes → affected scenes.
+
+AFTER THIS: Review affected scenes. Use context() on the script symbol for code-level blast radius.
+
+Returns: affected scenes, prefabs, and node paths grouped by distance.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', description: 'Prefab name, scene name, or script/class name to analyze' },
+        direction: {
+          type: 'string',
+          description: '"upstream" = what uses this asset (default), "downstream" = what this asset depends on',
+          enum: ['upstream', 'downstream'],
+          default: 'upstream',
+        },
+        repo: { type: 'string', description: 'Repository name or path. Omit if only one repo is indexed.' },
+      },
+      required: ['target'],
+    },
+  },
 ];

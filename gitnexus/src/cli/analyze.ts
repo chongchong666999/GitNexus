@@ -57,6 +57,7 @@ const PHASE_LABELS: Record<string, string> = {
   heritage: 'Extracting inheritance',
   communities: 'Detecting communities',
   processes: 'Detecting processes',
+  'game-assets': 'Indexing game assets',
   complete: 'Pipeline complete',
   kuzu: 'Loading into KuzuDB',
   fts: 'Creating search indexes',

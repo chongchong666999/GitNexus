@@ -62,6 +62,14 @@ function getNextStepHint(toolName: string, args: Record<string, any> | undefined
     case 'cypher':
       return `\n\n---\n**Next:** To explore a result symbol, use context({name: "<name>"${repoParam}}). For schema reference, READ gitnexus://repo/${repoPath}/schema.`;
 
+    // Cocos Creator game asset tools
+    case 'game_query':
+      return `\n\n---\n**Next:** Use game_context({name: "<asset_name>"${repoParam}}) for the full hierarchy of a result, or game_impact({target: "<name>"${repoParam}}) for blast radius.`;
+    case 'game_context':
+      return `\n\n---\n**Next:** Check script_refs in the output — use context({name: "<ScriptClass>"${repoParam}}) to see code-level details. Use game_impact({target: "${args?.name || '<name>'}"${repoParam}}) to see what depends on this asset.`;
+    case 'game_impact':
+      return `\n\n---\n**Next:** Review affected scenes. Use context({name: "<script_name>"${repoParam}}) to analyze the code-level blast radius of the script change.`;
+
     // Legacy tool names — still return useful hints
     case 'search':
       return `\n\n---\n**Next:** To understand a result in context, use context({name: "<symbol_name>"${repoParam}}).`;

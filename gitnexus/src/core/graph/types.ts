@@ -32,7 +32,12 @@ export type NodeLabel =
   | 'Delegate'
   | 'Annotation'
   | 'Constructor'
-  | 'Template';
+  | 'Template'
+  // Cocos Creator game asset types
+  | 'Scene'
+  | 'GameNode'
+  | 'GamePrefab'
+  | 'GameComponent';
 
 
 export type NodeProperties = {
@@ -73,6 +78,11 @@ export type RelationshipType =
   | 'EXTENDS'
   | 'MEMBER_OF'
   | 'STEP_IN_PROCESS'
+  // Cocos Creator game asset relation types
+  | 'CONTAINS_NODE'
+  | 'HAS_COMPONENT'
+  | 'INSTANTIATES'
+  | 'SCRIPT_REFS'
 
 export interface GraphNode {
   id:  string,

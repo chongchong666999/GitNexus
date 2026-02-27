@@ -83,6 +83,24 @@ export function getResourceTemplates(): ResourceTemplate[] {
       description: 'Step-by-step execution trace',
       mimeType: 'text/yaml',
     },
+    {
+      uriTemplate: 'gitnexus://repo/{name}/game-assets',
+      name: 'Game Assets Overview',
+      description: 'Cocos Creator project overview — scene count, prefab count, node stats',
+      mimeType: 'text/yaml',
+    },
+    {
+      uriTemplate: 'gitnexus://repo/{name}/scenes',
+      name: 'Scene List',
+      description: 'All Cocos Creator scenes indexed in this repository',
+      mimeType: 'text/yaml',
+    },
+    {
+      uriTemplate: 'gitnexus://repo/{name}/prefabs',
+      name: 'Prefab List',
+      description: 'All Cocos Creator prefabs indexed in this repository',
+      mimeType: 'text/yaml',
+    },
   ];
 }
 
@@ -108,6 +126,7 @@ function parseUri(uri: string): { repoName?: string; resourceType: string; param
 
     return { repoName, resourceType: rest };
   }
+
 
   throw new Error(`Unknown resource URI: ${uri}`);
 }
@@ -143,6 +162,12 @@ export async function readResource(uri: string, backend: LocalBackend): Promise<
       return getClusterDetailResource(parsed.param!, backend, repoName);
     case 'process':
       return getProcessDetailResource(parsed.param!, backend, repoName);
+    case 'game-assets':
+      return getGameAssetsResource(backend, repoName);
+    case 'scenes':
+      return getGameScenesResource(backend, repoName);
+    case 'prefabs':
+      return getGamePrefabsResource(backend, repoName);
     default:
       throw new Error(`Unknown resource: ${uri}`);
   }
@@ -421,6 +446,90 @@ async function getProcessDetailResource(name: string, backend: LocalBackend, rep
       }
     }
 
+    return lines.join('\n');
+  } catch (err: any) {
+    return `error: ${err.message}`;
+  }
+}
+
+/**
+ * Game assets overview — summary of all Cocos Creator assets in a repo.
+ */
+async function getGameAssetsResource(backend: LocalBackend, repoName?: string): Promise<string> {
+  try {
+    const sceneResult = await backend.queryGameAssets(repoName, 'Scene', 1000);
+    const prefabResult = await backend.queryGameAssets(repoName, 'GamePrefab', 1000);
+    const nodeResult = await backend.queryGameAssets(repoName, 'GameNode', 1);
+    const compResult = await backend.queryGameAssets(repoName, 'GameComponent', 1);
+
+    const lines: string[] = [
+      'game_assets:',
+      `  scenes: ${sceneResult.count}`,
+      `  prefabs: ${prefabResult.count}`,
+      `  nodes: ${nodeResult.count}`,
+      `  components: ${compResult.count}`,
+      '',
+      'tools:',
+      '  - game_query: Search by name/type',
+      '  - game_context: Full scene/prefab hierarchy',
+      '  - game_impact: Blast radius for prefab/script changes',
+      '',
+      'resources:',
+      '  - gitnexus://repo/{name}/scenes: All scenes',
+      '  - gitnexus://repo/{name}/prefabs: All prefabs',
+    ];
+
+    if (sceneResult.count === 0 && prefabResult.count === 0) {
+      lines.unshift('# No Cocos Creator assets detected. Run: gitnexus analyze\n');
+    }
+
+    return lines.join('\n');
+  } catch (err: any) {
+    return `error: ${err.message}`;
+  }
+}
+
+/**
+ * Scenes list resource
+ */
+async function getGameScenesResource(backend: LocalBackend, repoName?: string): Promise<string> {
+  try {
+    const result = await backend.queryGameAssets(repoName, 'Scene', 200);
+
+    if (result.items.length === 0) {
+      return 'scenes: []\n# No scenes indexed. Run: gitnexus analyze';
+    }
+
+    const lines: string[] = ['scenes:'];
+    for (const item of result.items) {
+      lines.push(`  - name: "${item.name}"`);
+      lines.push(`    file: "${item.filePath}"`);
+      if (item.nodeCount !== undefined) lines.push(`    nodes: ${item.nodeCount}`);
+      if (item.componentCount !== undefined) lines.push(`    components: ${item.componentCount}`);
+    }
+    return lines.join('\n');
+  } catch (err: any) {
+    return `error: ${err.message}`;
+  }
+}
+
+/**
+ * Prefabs list resource
+ */
+async function getGamePrefabsResource(backend: LocalBackend, repoName?: string): Promise<string> {
+  try {
+    const result = await backend.queryGameAssets(repoName, 'GamePrefab', 200);
+
+    if (result.items.length === 0) {
+      return 'prefabs: []\n# No prefabs indexed. Run: gitnexus analyze';
+    }
+
+    const lines: string[] = ['prefabs:'];
+    for (const item of result.items) {
+      lines.push(`  - name: "${item.name}"`);
+      lines.push(`    file: "${item.filePath}"`);
+      if (item.nodeCount !== undefined) lines.push(`    nodes: ${item.nodeCount}`);
+    }
     return lines.join('\n');
   } catch (err: any) {
     return `error: ${err.message}`;

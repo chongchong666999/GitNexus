@@ -230,6 +230,12 @@ export const streamAllCSVsToDisk = async (
     multiLangWriters.set(t, new BufferedCSVWriter(path.join(csvDir, `${t.toLowerCase()}.csv`), multiLangHeader));
   }
 
+  // Cocos Creator game asset writers
+  const sceneWriter = new BufferedCSVWriter(path.join(csvDir, 'scene.csv'), 'id,name,filePath,nodeCount,componentCount');
+  const gameNodeWriter = new BufferedCSVWriter(path.join(csvDir, 'gamenode.csv'), 'id,name,filePath,active,position,size');
+  const gamePrefabWriter = new BufferedCSVWriter(path.join(csvDir, 'gameprefab.csv'), 'id,name,filePath,uuid,nodeCount');
+  const gameComponentWriter = new BufferedCSVWriter(path.join(csvDir, 'gamecomponent.csv'), 'id,name,filePath,isScript,scriptPath');
+
   const codeWriterMap: Record<string, BufferedCSVWriter> = {
     'Function': functionWriter,
     'Class': classWriter,
@@ -274,6 +280,51 @@ export const streamAllCSVsToDisk = async (
           escapeCSVField((node.properties as any).enrichedBy || 'heuristic'),
           escapeCSVNumber(node.properties.cohesion, 0),
           escapeCSVNumber(node.properties.symbolCount, 0),
+        ].join(','));
+        break;
+      }
+      case 'Scene': {
+        const p = node.properties as any;
+        await sceneWriter.addRow([
+          escapeCSVField(node.id),
+          escapeCSVField(node.properties.name || ''),
+          escapeCSVField(node.properties.filePath || ''),
+          escapeCSVNumber(p.nodeCount, 0),
+          escapeCSVNumber(p.componentCount, 0),
+        ].join(','));
+        break;
+      }
+      case 'GameNode': {
+        const p = node.properties as any;
+        await gameNodeWriter.addRow([
+          escapeCSVField(node.id),
+          escapeCSVField(node.properties.name || ''),
+          escapeCSVField(node.properties.filePath || ''),
+          p.active !== false ? 'true' : 'false',
+          escapeCSVField(p.position || ''),
+          escapeCSVField(p.size || ''),
+        ].join(','));
+        break;
+      }
+      case 'GamePrefab': {
+        const p = node.properties as any;
+        await gamePrefabWriter.addRow([
+          escapeCSVField(node.id),
+          escapeCSVField(node.properties.name || ''),
+          escapeCSVField(node.properties.filePath || ''),
+          escapeCSVField(p.uuid || ''),
+          escapeCSVNumber(p.nodeCount, 0),
+        ].join(','));
+        break;
+      }
+      case 'GameComponent': {
+        const p = node.properties as any;
+        await gameComponentWriter.addRow([
+          escapeCSVField(node.id),
+          escapeCSVField(node.properties.name || ''),
+          escapeCSVField(node.properties.filePath || ''),
+          p.isScript ? 'true' : 'false',
+          escapeCSVField(p.scriptPath || ''),
         ].join(','));
         break;
       }
@@ -329,7 +380,7 @@ export const streamAllCSVsToDisk = async (
   }
 
   // Finish all node writers
-  const allWriters = [fileWriter, folderWriter, functionWriter, classWriter, interfaceWriter, methodWriter, codeElemWriter, communityWriter, processWriter, ...multiLangWriters.values()];
+  const allWriters = [fileWriter, folderWriter, functionWriter, classWriter, interfaceWriter, methodWriter, codeElemWriter, communityWriter, processWriter, ...multiLangWriters.values(), sceneWriter, gameNodeWriter, gamePrefabWriter, gameComponentWriter];
   await Promise.all(allWriters.map(w => w.finish()));
 
   // --- Stream relationship CSV ---
@@ -356,6 +407,9 @@ export const streamAllCSVsToDisk = async (
     ['CodeElement', codeElemWriter],
     ['Community', communityWriter], ['Process', processWriter],
     ...Array.from(multiLangWriters.entries()).map(([name, w]) => [name as NodeTableName, w] as [NodeTableName, BufferedCSVWriter]),
+    // Cocos Creator game asset tables
+    ['Scene', sceneWriter], ['GameNode', gameNodeWriter],
+    ['GamePrefab', gamePrefabWriter], ['GameComponent', gameComponentWriter],
   ];
   for (const [name, writer] of tableMap) {
     if (writer.rows > 0) {

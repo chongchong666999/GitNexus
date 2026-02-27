@@ -41,6 +41,8 @@ const VALID_NODE_LABELS = new Set([
   'Community', 'Process', 'Struct', 'Enum', 'Macro', 'Typedef', 'Union',
   'Namespace', 'Trait', 'Impl', 'TypeAlias', 'Const', 'Static', 'Property',
   'Record', 'Delegate', 'Annotation', 'Constructor', 'Template', 'Module',
+  // Cocos Creator game asset types
+  'Scene', 'GameNode', 'GamePrefab', 'GameComponent',
 ]);
 
 export interface CodebaseContext {
@@ -291,6 +293,13 @@ export class LocalBackend {
         return this.detectChanges(repo, params);
       case 'rename':
         return this.rename(repo, params);
+      // Cocos Creator game asset tools
+      case 'game_query':
+        return this.gameQuery(repo, params);
+      case 'game_context':
+        return this.gameContext(repo, params);
+      case 'game_impact':
+        return this.gameImpact(repo, params);
       // Legacy aliases for backwards compatibility
       case 'search':
         return this.query(repo, params);
@@ -1586,6 +1595,252 @@ export class LocalBackend {
         step: s.step || s[3], name: s.name || s[0], type: s.type || s[1], filePath: s.filePath || s[2],
       })),
     };
+  }
+
+  // ─── Cocos Creator Game Asset Tools ──────────────────────────────────────
+
+  /**
+   * Query game assets by name keyword and optional type filter.
+   */
+  private async gameQuery(repo: RepoHandle, params: {
+    query: string;
+    type?: 'scene' | 'prefab' | 'node' | 'component';
+    limit?: number;
+  }): Promise<string> {
+    await this.ensureInitialized(repo.id);
+
+    const keyword = params.query.replace(/'/g, "''");
+    const limit = params.limit ?? 20;
+    const lines: string[] = [];
+
+    const typeMap: Record<string, string> = {
+      scene: 'Scene',
+      prefab: 'GamePrefab',
+      node: 'GameNode',
+      component: 'GameComponent',
+    };
+
+    const tablesToQuery = params.type
+      ? [typeMap[params.type]]
+      : ['Scene', 'GamePrefab', 'GameNode', 'GameComponent'];
+
+    for (const table of tablesToQuery) {
+      const rows = await executeQuery(repo.id, `
+        MATCH (n:${table})
+        WHERE n.name CONTAINS '${keyword}'
+        RETURN n.id AS id, n.name AS name, n.filePath AS filePath
+        LIMIT ${limit}
+      `).catch(() => [] as any[]);
+
+      if (rows.length > 0) {
+        lines.push(`${table}:`);
+        for (const row of rows) {
+          const name = row.name || row[1];
+          const filePath = row.filePath || row[2];
+          lines.push(`  - name: "${name}"`);
+          lines.push(`    file: "${filePath}"`);
+        }
+        lines.push('');
+      }
+    }
+
+    if (lines.length === 0) {
+      return `# No game assets found matching "${params.query}"\n# Tip: Run gitnexus analyze if this is a Cocos Creator project`;
+    }
+
+    return lines.join('\n') + `\n---\nNext: game_context({name: "<name>"}) for hierarchy, game_impact({target: "<name>"}) for blast radius.`;
+  }
+
+  /**
+   * Get full context for a scene or prefab — hierarchy + components + script refs.
+   */
+  private async gameContext(repo: RepoHandle, params: {
+    name: string;
+    includeInactive?: boolean;
+  }): Promise<string> {
+    await this.ensureInitialized(repo.id);
+
+    const escaped = params.name.replace(/'/g, "''");
+    const lines: string[] = [];
+
+    // Try Scene first, then GamePrefab
+    for (const table of ['Scene', 'GamePrefab']) {
+      const assets = await executeQuery(repo.id, `
+        MATCH (a:${table})
+        WHERE a.name = '${escaped}' OR a.name CONTAINS '${escaped}'
+        RETURN a.id AS id, a.name AS name, a.filePath AS filePath
+        LIMIT 1
+      `).catch(() => [] as any[]);
+
+      if (assets.length === 0) continue;
+
+      const asset = assets[0];
+      const assetId = asset.id || asset[0];
+      const assetName = asset.name || asset[1];
+      const assetFile = asset.filePath || asset[2];
+
+      lines.push(`${table.toLowerCase()}: "${assetName}"`);
+      lines.push(`file: "${assetFile}"`);
+      lines.push('');
+
+      // Direct children
+      const children = await executeQuery(repo.id, `
+        MATCH (a {id: '${assetId}'})-[:CodeRelation {type: 'CONTAINS_NODE'}]->(n:GameNode)
+        RETURN n.name AS name, n.active AS active, n.size AS size
+        LIMIT 50
+      `).catch(() => [] as any[]);
+
+      if (children.length > 0) {
+        lines.push('root_nodes:');
+        for (const child of children) {
+          const active = child.active !== false ? '' : ' [inactive]';
+          lines.push(`  - "${child.name || child[0]}"${active}`);
+        }
+        lines.push('');
+      }
+
+      // All script components
+      const scripts = await executeQuery(repo.id, `
+        MATCH (a {id: '${assetId}'})-[:CodeRelation {type: 'CONTAINS_NODE'}*1..10]->(n:GameNode)
+              -[:CodeRelation {type: 'HAS_COMPONENT'}]->(c:GameComponent)
+        WHERE c.isScript = true
+        RETURN DISTINCT c.name AS script, n.name AS onNode, c.scriptPath AS scriptPath
+        LIMIT 30
+      `).catch(() => [] as any[]);
+
+      if (scripts.length > 0) {
+        lines.push('script_components:');
+        for (const s of scripts) {
+          lines.push(`  - script: "${s.script || s[0]}"`);
+          lines.push(`    on_node: "${s.onNode || s[1]}"`);
+          if (s.scriptPath || s[2]) lines.push(`    path: "${s.scriptPath || s[2]}"`);
+        }
+        lines.push('');
+      }
+
+      // Cross-layer: script refs to code symbols
+      const codeRefs = await executeQuery(repo.id, `
+        MATCH (a {id: '${assetId}'})-[:CodeRelation {type: 'CONTAINS_NODE'}*1..10]->(n:GameNode)
+              -[:CodeRelation {type: 'HAS_COMPONENT'}]->(c:GameComponent)
+              -[:CodeRelation {type: 'SCRIPT_REFS'}]->(sym)
+        RETURN DISTINCT sym.name AS symbol, labels(sym)[0] AS type, sym.filePath AS file
+        LIMIT 20
+      `).catch(() => [] as any[]);
+
+      if (codeRefs.length > 0) {
+        lines.push('code_symbols_used:  # cross-layer: game → code');
+        for (const ref of codeRefs) {
+          lines.push(`  - name: "${ref.symbol || ref[0]}" (${ref.type || ref[1]})`);
+          lines.push(`    file: "${ref.file || ref[2]}"`);
+        }
+      }
+
+      break;
+    }
+
+    if (lines.length === 0) {
+      return `# Asset "${params.name}" not found\n# Use game_query({query: "${params.name}"}) to search`;
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Analyze blast radius for a game asset (prefab, scene, or script class).
+   */
+  private async gameImpact(repo: RepoHandle, params: {
+    target: string;
+    direction?: 'upstream' | 'downstream';
+  }): Promise<string> {
+    await this.ensureInitialized(repo.id);
+
+    const escaped = params.target.replace(/'/g, "''");
+    const lines: string[] = [`target: "${params.target}"`, 'direction: upstream', ''];
+
+    // Find which scenes use this prefab
+    const scenesUsingPrefab = await executeQuery(repo.id, `
+      MATCH (p:GamePrefab)
+      WHERE p.name = '${escaped}' OR p.name CONTAINS '${escaped}'
+      WITH p
+      MATCH (s:Scene)-[:CodeRelation {type: 'CONTAINS_NODE'}*1..10]->(n:GameNode)
+            -[:CodeRelation {type: 'INSTANTIATES'}]->(p)
+      RETURN DISTINCT s.name AS scene, s.filePath AS file
+      LIMIT 20
+    `).catch(() => [] as any[]);
+
+    if (scenesUsingPrefab.length > 0) {
+      lines.push('scenes_using_this_prefab:');
+      for (const s of scenesUsingPrefab) {
+        lines.push(`  - "${s.scene || s[0]}" (${s.file || s[1]})`);
+      }
+      lines.push('');
+    }
+
+    // Find scenes affected by a script class change (cross-layer: code → game)
+    const scenesUsingScript = await executeQuery(repo.id, `
+      MATCH (sym)
+      WHERE (sym:Class OR sym:Function) AND (sym.name = '${escaped}' OR sym.name CONTAINS '${escaped}')
+      WITH sym
+      MATCH (c:GameComponent)-[:CodeRelation {type: 'SCRIPT_REFS'}]->(sym)
+      MATCH (n:GameNode)-[:CodeRelation {type: 'HAS_COMPONENT'}]->(c)
+      MATCH (s:Scene)-[:CodeRelation {type: 'CONTAINS_NODE'}*1..10]->(n)
+      RETURN DISTINCT s.name AS scene, s.filePath AS file, c.name AS via_script
+      LIMIT 20
+    `).catch(() => [] as any[]);
+
+    if (scenesUsingScript.length > 0) {
+      lines.push('scenes_using_this_script:  # cross-layer impact');
+      for (const s of scenesUsingScript) {
+        lines.push(`  - scene: "${s.scene || s[0]}"`);
+        lines.push(`    file: "${s.file || s[1]}"`);
+        lines.push(`    via: "${s.via_script || s[2]}"`);
+      }
+      lines.push('');
+    }
+
+    if (scenesUsingPrefab.length === 0 && scenesUsingScript.length === 0) {
+      lines.push(`# No impact found for "${params.target}"`);
+      lines.push('# Try game_query to verify the asset name, or context() for code-level impact');
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Query game assets by node type — for MCP resources (scenes, prefabs lists).
+   */
+  async queryGameAssets(repoName: string | undefined, table: string, limit: number): Promise<{ count: number; items: any[] }> {
+    const repo = await this.resolveRepo(repoName);
+    await this.ensureInitialized(repo.id);
+
+    if (!VALID_NODE_LABELS.has(table)) {
+      return { count: 0, items: [] };
+    }
+
+    try {
+      const rows = await executeQuery(repo.id, `
+        MATCH (n:${table})
+        RETURN n.name AS name, n.filePath AS filePath,
+               CASE WHEN n.nodeCount IS NOT NULL THEN n.nodeCount ELSE -1 END AS nodeCount,
+               CASE WHEN n.componentCount IS NOT NULL THEN n.componentCount ELSE -1 END AS componentCount
+        LIMIT ${limit}
+      `);
+
+      const countRows = await executeQuery(repo.id, `MATCH (n:${table}) RETURN count(n) AS c`);
+      const count = countRows.length > 0 ? (countRows[0].c ?? countRows[0][0] ?? 0) : 0;
+
+      return {
+        count: Number(count),
+        items: rows.map((r: any) => ({
+          name: r.name ?? r[0],
+          filePath: r.filePath ?? r[1],
+          nodeCount: r.nodeCount !== -1 ? r.nodeCount : undefined,
+          componentCount: r.componentCount !== -1 ? r.componentCount : undefined,
+        })),
+      };
+    } catch {
+      return { count: 0, items: [] };
+    }
   }
 
   async disconnect(): Promise<void> {
