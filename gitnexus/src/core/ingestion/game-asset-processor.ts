@@ -18,7 +18,11 @@ import { PipelineProgress } from '../../types/pipeline.js';
 import { isCocosProject } from '../plugins/cocos/cocos-detector.js';
 import { parseCocosFileContent } from '../plugins/cocos/cocos-file-parser.js';
 import { addCocosFileToGraph } from '../plugins/cocos/cocos-graph-builder.js';
-import { resolveScriptRefs, buildMetaUuidMap } from '../plugins/cocos/cocos-script-resolver.js';
+import { buildMetaUuidMap } from '../plugins/cocos/cocos-script-resolver.js';
+import {
+  enhancePrefabInstantiationRelations,
+  enhanceScriptRelations,
+} from '../plugins/cocos/phase1/index.js';
 import { ScannedFile } from './filesystem-walker.js';
 
 const COCOS_EXTENSIONS = new Set(['.fire', '.prefab']);
@@ -83,6 +87,8 @@ export async function processGameAssets(
   let scenesFound = 0;
   let prefabsFound = 0;
   let processed = 0;
+  let prefabInstantiateEdges = 0;
+  let prefabInstantiateRefsMatched = 0;
 
   for (let i = 0; i < cocosFiles.length; i += PARALLEL_BATCH) {
     const batch = cocosFiles.slice(i, i + PARALLEL_BATCH);
@@ -93,6 +99,15 @@ export async function processGameAssets(
         const parsed = parseCocosFileContent(file.path, content);
         if (parsed) {
           addCocosFileToGraph(graph, parsed);
+          const instantiationResult = enhancePrefabInstantiationRelations(
+            graph,
+            parsed,
+            content,
+            metaUuidMap,
+          );
+          prefabInstantiateEdges += instantiationResult.edgesAdded;
+          prefabInstantiateRefsMatched += instantiationResult.refsMatched;
+
           if (parsed.assetType === 'scene-file') scenesFound++;
           else prefabsFound++;
         }
@@ -109,8 +124,8 @@ export async function processGameAssets(
     });
   }
 
-  // ── Resolve script cross-layer references ─────────────────────────────────
-  resolveScriptRefs(graph, metaUuidMap);
+  // ── Phase 1 Cocos relation enhancement (isolated module) ─────────────────
+  const scriptEnhanceResult = enhanceScriptRelations(graph, metaUuidMap);
 
   const nodesAdded = graph.nodeCount - startNodeCount;
   const relsAdded = graph.relationshipCount - startRelCount;
@@ -118,7 +133,7 @@ export async function processGameAssets(
   onProgress({
     phase: 'game-assets',
     percent: 99,
-    message: `Game assets: ${scenesFound} scenes, ${prefabsFound} prefabs → ${nodesAdded} nodes, ${relsAdded} rels`,
+    message: `Game assets: ${scenesFound} scenes, ${prefabsFound} prefabs → ${nodesAdded} nodes, ${relsAdded} rels (script refs +${scriptEnhanceResult.edgesAdded}, instantiate +${prefabInstantiateEdges}/${prefabInstantiateRefsMatched} refs)`,
     stats: { filesProcessed: total, totalFiles: total, nodesCreated: graph.nodeCount },
   });
 

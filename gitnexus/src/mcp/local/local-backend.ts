@@ -1707,10 +1707,46 @@ export class LocalBackend {
         lines.push('');
       }
 
+      // Incoming prefab instantiation edges (who instantiates this asset)
+      const instantiationSources = await executeQuery(repo.id, `
+        MATCH (src)-[:CodeRelation {type: 'INSTANTIATES'}]->(a {id: '${assetId}'})
+        RETURN DISTINCT src.id AS sourceId, src.name AS sourceName, src.filePath AS sourceFile
+        LIMIT 50
+      `).catch(() => [] as any[]);
+
+      if (instantiationSources.length > 0) {
+        lines.push('instantiation_sources:');
+        for (const row of instantiationSources) {
+          const sourceId = String(row.sourceId || row[0] || '');
+          const sourceType = sourceId.split(':')[0] || 'unknown';
+          lines.push(`  - source: "${row.sourceName || row[1]}"`);
+          lines.push(`    source_type: "${sourceType}"`);
+          lines.push(`    source_file: "${row.sourceFile || row[2] || ''}"`);
+        }
+        lines.push('');
+      }
+
+      // Outgoing prefab instantiation edges from this asset's hierarchy
+      const instantiatesPrefabs = await executeQuery(repo.id, `
+        MATCH (n:GameNode {filePath: '${assetFile}'})-[:CodeRelation {type: 'INSTANTIATES'}]->(p:GamePrefab)
+        WHERE p.id <> '${assetId}'
+        RETURN DISTINCT n.name AS fromNode, p.name AS prefab, p.filePath AS file
+        LIMIT 50
+      `).catch(() => [] as any[]);
+
+      if (instantiatesPrefabs.length > 0) {
+        lines.push('instantiates_prefabs:');
+        for (const row of instantiatesPrefabs) {
+          lines.push(`  - from_node: "${row.fromNode || row[0]}"`);
+          lines.push(`    prefab: "${row.prefab || row[1]}"`);
+          lines.push(`    file: "${row.file || row[2]}"`);
+        }
+        lines.push('');
+      }
+
       // All script components
       const scripts = await executeQuery(repo.id, `
-        MATCH (a {id: '${assetId}'})-[:CodeRelation {type: 'CONTAINS_NODE'}*1..10]->(n:GameNode)
-              -[:CodeRelation {type: 'HAS_COMPONENT'}]->(c:GameComponent)
+        MATCH (n:GameNode)-[:CodeRelation {type: 'HAS_COMPONENT'}]->(c:GameComponent {filePath: '${assetFile}'})
         WHERE c.isScript = true
         RETURN DISTINCT c.name AS script, n.name AS onNode, c.scriptPath AS scriptPath
         LIMIT 30
@@ -1728,17 +1764,17 @@ export class LocalBackend {
 
       // Cross-layer: script refs to code symbols
       const codeRefs = await executeQuery(repo.id, `
-        MATCH (a {id: '${assetId}'})-[:CodeRelation {type: 'CONTAINS_NODE'}*1..10]->(n:GameNode)
-              -[:CodeRelation {type: 'HAS_COMPONENT'}]->(c:GameComponent)
-              -[:CodeRelation {type: 'SCRIPT_REFS'}]->(sym)
-        RETURN DISTINCT sym.name AS symbol, labels(sym)[0] AS type, sym.filePath AS file
+        MATCH (c:GameComponent {filePath: '${assetFile}'})-[:CodeRelation {type: 'SCRIPT_REFS'}]->(sym)
+        RETURN DISTINCT sym.id AS symId, sym.name AS symbol, sym.filePath AS file
         LIMIT 20
       `).catch(() => [] as any[]);
 
       if (codeRefs.length > 0) {
         lines.push('code_symbols_used:  # cross-layer: game → code');
         for (const ref of codeRefs) {
-          lines.push(`  - name: "${ref.symbol || ref[0]}" (${ref.type || ref[1]})`);
+          const symId = String(ref.symId || ref[0] || '');
+          const symType = symId.split(':')[0] || 'unknown';
+          lines.push(`  - name: "${ref.symbol || ref[1]}" (${symType})`);
           lines.push(`    file: "${ref.file || ref[2]}"`);
         }
       }
