@@ -1,8 +1,10 @@
 /**
  * Framework Detection
  * 
- * Detects frameworks from file path patterns and provides entry point multipliers.
- * This enables framework-aware entry point scoring.
+ * Detects frameworks from:
+ * 1) file path patterns
+ * 2) AST definition text (decorators/annotations/attributes)
+ * and provides entry point multipliers for process scoring.
  * 
  * DESIGN: Returns null for unknown frameworks, which causes a 1.0 multiplier
  * (no bonus, no penalty) - same behavior as before this feature.
@@ -257,6 +259,53 @@ export function detectFrameworkFromPath(filePath: string): FrameworkHint | null 
     return { framework: 'laravel', entryPointMultiplier: 1.5, reason: 'laravel-repository' };
   }
 
+  // ========== SWIFT / iOS ==========
+
+  // iOS App entry points (highest priority)
+  if (p.endsWith('/appdelegate.swift') || p.endsWith('/scenedelegate.swift') || p.endsWith('/app.swift')) {
+    return { framework: 'ios', entryPointMultiplier: 3.0, reason: 'ios-app-entry' };
+  }
+
+  // SwiftUI App entry (@main)
+  if (p.endsWith('app.swift') && p.includes('/sources/')) {
+    return { framework: 'swiftui', entryPointMultiplier: 3.0, reason: 'swiftui-app' };
+  }
+
+  // UIKit ViewControllers (high priority - screen entry points)
+  if ((p.includes('/viewcontrollers/') || p.includes('/controllers/') || p.includes('/screens/')) && p.endsWith('.swift')) {
+    return { framework: 'uikit', entryPointMultiplier: 2.5, reason: 'uikit-viewcontroller' };
+  }
+
+  // ViewController by filename convention
+  if (p.endsWith('viewcontroller.swift') || p.endsWith('vc.swift')) {
+    return { framework: 'uikit', entryPointMultiplier: 2.5, reason: 'uikit-viewcontroller-file' };
+  }
+
+  // Coordinator pattern (navigation entry points)
+  if (p.includes('/coordinators/') && p.endsWith('.swift')) {
+    return { framework: 'ios-coordinator', entryPointMultiplier: 2.5, reason: 'ios-coordinator' };
+  }
+
+  // Coordinator by filename
+  if (p.endsWith('coordinator.swift')) {
+    return { framework: 'ios-coordinator', entryPointMultiplier: 2.5, reason: 'ios-coordinator-file' };
+  }
+
+  // SwiftUI Views (moderate - reusable components)
+  if ((p.includes('/views/') || p.includes('/scenes/')) && p.endsWith('.swift')) {
+    return { framework: 'swiftui', entryPointMultiplier: 1.8, reason: 'swiftui-view' };
+  }
+
+  // Service layer
+  if (p.includes('/services/') && p.endsWith('.swift')) {
+    return { framework: 'ios-service', entryPointMultiplier: 1.8, reason: 'ios-service' };
+  }
+
+  // Router / navigation
+  if (p.includes('/router/') && p.endsWith('.swift')) {
+    return { framework: 'ios-router', entryPointMultiplier: 2.0, reason: 'ios-router' };
+  }
+
   // ========== GENERIC PATTERNS ==========
 
   // Any language: index files in API folders
@@ -272,12 +321,12 @@ export function detectFrameworkFromPath(filePath: string): FrameworkHint | null 
 }
 
 // ============================================================================
-// FUTURE: AST-BASED PATTERNS (for Phase 3)
+// AST-BASED FRAMEWORK DETECTION
 // ============================================================================
 
 /**
- * Patterns that indicate entry points within code (for future AST-based detection)
- * These would require parsing decorators/annotations in the code itself.
+ * Patterns that indicate framework entry points within code definitions.
+ * These are matched against AST node text (class/method/function declaration text).
  */
 export const FRAMEWORK_AST_PATTERNS = {
   // JavaScript/TypeScript decorators
@@ -306,4 +355,69 @@ export const FRAMEWORK_AST_PATTERNS = {
   'actix': ['#[get', '#[post', '#[put', '#[delete'],
   'axum': ['Router::new'],
   'rocket': ['#[get', '#[post'],
+
+  // Swift/iOS
+  'uikit': ['viewDidLoad', 'viewWillAppear', 'viewDidAppear', 'UIViewController'],
+  'swiftui': ['@main', 'WindowGroup', 'ContentView', '@StateObject', '@ObservedObject'],
+  'combine': ['sink', 'assign', 'Publisher', 'Subscriber'],
 };
+
+interface AstFrameworkPatternConfig {
+  framework: string;
+  entryPointMultiplier: number;
+  reason: string;
+  patterns: string[];
+}
+
+const AST_FRAMEWORK_PATTERNS_BY_LANGUAGE: Record<string, AstFrameworkPatternConfig[]> = {
+  javascript: [
+    { framework: 'nestjs', entryPointMultiplier: 3.2, reason: 'nestjs-decorator', patterns: FRAMEWORK_AST_PATTERNS.nestjs },
+  ],
+  typescript: [
+    { framework: 'nestjs', entryPointMultiplier: 3.2, reason: 'nestjs-decorator', patterns: FRAMEWORK_AST_PATTERNS.nestjs },
+  ],
+  python: [
+    { framework: 'fastapi', entryPointMultiplier: 3.0, reason: 'fastapi-decorator', patterns: FRAMEWORK_AST_PATTERNS.fastapi },
+    { framework: 'flask', entryPointMultiplier: 2.8, reason: 'flask-decorator', patterns: FRAMEWORK_AST_PATTERNS.flask },
+  ],
+  java: [
+    { framework: 'spring', entryPointMultiplier: 3.2, reason: 'spring-annotation', patterns: FRAMEWORK_AST_PATTERNS.spring },
+    { framework: 'jaxrs', entryPointMultiplier: 3.0, reason: 'jaxrs-annotation', patterns: FRAMEWORK_AST_PATTERNS.jaxrs },
+  ],
+  csharp: [
+    { framework: 'aspnet', entryPointMultiplier: 3.2, reason: 'aspnet-attribute', patterns: FRAMEWORK_AST_PATTERNS.aspnet },
+  ],
+  php: [
+    { framework: 'laravel', entryPointMultiplier: 3.0, reason: 'php-route-attribute', patterns: FRAMEWORK_AST_PATTERNS.laravel },
+  ],
+};
+
+/**
+ * Detect framework entry points from AST definition text (decorators/annotations/attributes).
+ * Returns null if no known pattern is found.
+ */
+export function detectFrameworkFromAST(
+  language: string,
+  definitionText: string
+): FrameworkHint | null {
+  if (!language || !definitionText) return null;
+
+  const configs = AST_FRAMEWORK_PATTERNS_BY_LANGUAGE[language.toLowerCase()];
+  if (!configs || configs.length === 0) return null;
+
+  const normalized = definitionText.toLowerCase();
+
+  for (const cfg of configs) {
+    for (const pattern of cfg.patterns) {
+      if (normalized.includes(pattern.toLowerCase())) {
+        return {
+          framework: cfg.framework,
+          entryPointMultiplier: cfg.entryPointMultiplier,
+          reason: cfg.reason,
+        };
+      }
+    }
+  }
+
+  return null;
+}
