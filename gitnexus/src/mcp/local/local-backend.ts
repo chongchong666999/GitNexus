@@ -1801,48 +1801,182 @@ export class LocalBackend {
     const escaped = params.target.replace(/'/g, "''");
     const lines: string[] = [`target: "${params.target}"`, 'direction: upstream', ''];
 
-    // Find which scenes use this prefab
-    const scenesUsingPrefab = await executeQuery(repo.id, `
+    // Prefab blast radius: collect all sources that instantiate this prefab,
+    // then lift node-level edges to owning scenes/prefabs.
+    const prefabImpactRows = await executeQuery(repo.id, `
       MATCH (p:GamePrefab)
       WHERE p.name = '${escaped}' OR p.name CONTAINS '${escaped}'
       WITH p
-      MATCH (s:Scene)-[:CodeRelation {type: 'CONTAINS_NODE'}*1..10]->(n:GameNode)
-            -[:CodeRelation {type: 'INSTANTIATES'}]->(p)
-      RETURN DISTINCT s.name AS scene, s.filePath AS file
-      LIMIT 20
+      MATCH (src)-[:CodeRelation {type: 'INSTANTIATES'}]->(p)
+      OPTIONAL MATCH (ownerScene:Scene {filePath: src.filePath})
+      OPTIONAL MATCH (ownerPrefab:GamePrefab {filePath: src.filePath})
+      RETURN DISTINCT
+        src.id AS sourceId,
+        src.name AS sourceName,
+        src.filePath AS sourceFile,
+        ownerScene.name AS sceneName,
+        ownerScene.filePath AS sceneFile,
+        ownerPrefab.name AS prefabName,
+        ownerPrefab.filePath AS prefabFile
+      LIMIT 200
     `).catch(() => [] as any[]);
+
+    const instantiationSources: Array<{ id: string; type: string; name: string; file: string }> = [];
+    const seenSources = new Set<string>();
+
+    const scenesUsingPrefab: Array<{ name: string; file: string }> = [];
+    const seenScenes = new Set<string>();
+
+    const prefabsUsingPrefab: Array<{ name: string; file: string }> = [];
+    const seenPrefabs = new Set<string>();
+
+    for (const row of prefabImpactRows) {
+      const sourceId = String(row.sourceId || row[0] || '');
+      const sourceType = sourceId.split(':')[0] || 'unknown';
+      const sourceName = String(row.sourceName || row[1] || '');
+      const sourceFile = String(row.sourceFile || row[2] || '');
+
+      const sourceKey = sourceId || `${sourceType}:${sourceName}:${sourceFile}`;
+      if (!seenSources.has(sourceKey)) {
+        seenSources.add(sourceKey);
+        instantiationSources.push({
+          id: sourceId,
+          type: sourceType,
+          name: sourceName,
+          file: sourceFile,
+        });
+      }
+
+      // Direct Scene -> GamePrefab edge is valid in schema.
+      if (sourceType === 'Scene') {
+        const sceneKey = `${sourceName}|${sourceFile}`;
+        if (sourceName && !seenScenes.has(sceneKey)) {
+          seenScenes.add(sceneKey);
+          scenesUsingPrefab.push({ name: sourceName, file: sourceFile });
+        }
+      }
+
+      const sceneName = String(row.sceneName || row[3] || '');
+      const sceneFile = String(row.sceneFile || row[4] || '');
+      if (sceneName) {
+        const sceneKey = `${sceneName}|${sceneFile}`;
+        if (!seenScenes.has(sceneKey)) {
+          seenScenes.add(sceneKey);
+          scenesUsingPrefab.push({ name: sceneName, file: sceneFile });
+        }
+      }
+
+      const prefabName = String(row.prefabName || row[5] || '');
+      const prefabFile = String(row.prefabFile || row[6] || '');
+      if (prefabName) {
+        const prefabKey = `${prefabName}|${prefabFile}`;
+        if (!seenPrefabs.has(prefabKey)) {
+          seenPrefabs.add(prefabKey);
+          prefabsUsingPrefab.push({ name: prefabName, file: prefabFile });
+        }
+      }
+    }
+
+    if (instantiationSources.length > 0) {
+      lines.push('instantiation_sources:');
+      for (const src of instantiationSources.slice(0, 50)) {
+        lines.push(`  - source: "${src.name}"`);
+        lines.push(`    source_type: "${src.type}"`);
+        lines.push(`    source_file: "${src.file}"`);
+      }
+      lines.push('');
+    }
 
     if (scenesUsingPrefab.length > 0) {
       lines.push('scenes_using_this_prefab:');
       for (const s of scenesUsingPrefab) {
-        lines.push(`  - "${s.scene || s[0]}" (${s.file || s[1]})`);
+        lines.push(`  - "${s.name}" (${s.file})`);
       }
       lines.push('');
     }
 
-    // Find scenes affected by a script class change (cross-layer: code → game)
-    const scenesUsingScript = await executeQuery(repo.id, `
+    if (prefabsUsingPrefab.length > 0) {
+      lines.push('prefabs_using_this_prefab:');
+      for (const p of prefabsUsingPrefab) {
+        lines.push(`  - "${p.name}" (${p.file})`);
+      }
+      lines.push('');
+    }
+
+    // Cross-layer script blast radius: code symbol -> script components -> node owners.
+    const scriptImpactRows = await executeQuery(repo.id, `
       MATCH (sym)
-      WHERE (sym:Class OR sym:Function) AND (sym.name = '${escaped}' OR sym.name CONTAINS '${escaped}')
+      WHERE (sym.id STARTS WITH 'Class:' OR sym.id STARTS WITH 'Function:' OR sym.id STARTS WITH 'Method:')
+        AND (sym.name = '${escaped}' OR sym.name CONTAINS '${escaped}')
       WITH sym
       MATCH (c:GameComponent)-[:CodeRelation {type: 'SCRIPT_REFS'}]->(sym)
-      MATCH (n:GameNode)-[:CodeRelation {type: 'HAS_COMPONENT'}]->(c)
-      MATCH (s:Scene)-[:CodeRelation {type: 'CONTAINS_NODE'}*1..10]->(n)
-      RETURN DISTINCT s.name AS scene, s.filePath AS file, c.name AS via_script
-      LIMIT 20
+      OPTIONAL MATCH (s:Scene {filePath: c.filePath})
+      OPTIONAL MATCH (p:GamePrefab {filePath: c.filePath})
+      RETURN DISTINCT
+        s.name AS scene,
+        s.filePath AS sceneFile,
+        p.name AS prefab,
+        p.filePath AS prefabFile,
+        c.name AS viaScript
+      LIMIT 200
     `).catch(() => [] as any[]);
+
+    const scenesUsingScript: Array<{ scene: string; file: string; via: string }> = [];
+    const seenScriptScenes = new Set<string>();
+    const prefabsUsingScript: Array<{ prefab: string; file: string; via: string }> = [];
+    const seenScriptPrefabs = new Set<string>();
+
+    for (const row of scriptImpactRows) {
+      const scene = String(row.scene || row[0] || '');
+      const sceneFile = String(row.sceneFile || row[1] || '');
+      const prefab = String(row.prefab || row[2] || '');
+      const prefabFile = String(row.prefabFile || row[3] || '');
+      const via = String(row.viaScript || row[4] || '');
+
+      if (scene) {
+        const key = `${scene}|${sceneFile}|${via}`;
+        if (!seenScriptScenes.has(key)) {
+          seenScriptScenes.add(key);
+          scenesUsingScript.push({ scene, file: sceneFile, via });
+        }
+      }
+
+      if (prefab) {
+        const key = `${prefab}|${prefabFile}|${via}`;
+        if (!seenScriptPrefabs.has(key)) {
+          seenScriptPrefabs.add(key);
+          prefabsUsingScript.push({ prefab, file: prefabFile, via });
+        }
+      }
+    }
 
     if (scenesUsingScript.length > 0) {
       lines.push('scenes_using_this_script:  # cross-layer impact');
       for (const s of scenesUsingScript) {
-        lines.push(`  - scene: "${s.scene || s[0]}"`);
-        lines.push(`    file: "${s.file || s[1]}"`);
-        lines.push(`    via: "${s.via_script || s[2]}"`);
+        lines.push(`  - scene: "${s.scene}"`);
+        lines.push(`    file: "${s.file}"`);
+        lines.push(`    via: "${s.via}"`);
       }
       lines.push('');
     }
 
-    if (scenesUsingPrefab.length === 0 && scenesUsingScript.length === 0) {
+    if (prefabsUsingScript.length > 0) {
+      lines.push('prefabs_using_this_script:  # cross-layer impact');
+      for (const p of prefabsUsingScript) {
+        lines.push(`  - prefab: "${p.prefab}"`);
+        lines.push(`    file: "${p.file}"`);
+        lines.push(`    via: "${p.via}"`);
+      }
+      lines.push('');
+    }
+
+    if (
+      instantiationSources.length === 0 &&
+      scenesUsingPrefab.length === 0 &&
+      prefabsUsingPrefab.length === 0 &&
+      scenesUsingScript.length === 0 &&
+      prefabsUsingScript.length === 0
+    ) {
       lines.push(`# No impact found for "${params.target}"`);
       lines.push('# Try game_query to verify the asset name, or context() for code-level impact');
     }
